@@ -1,15 +1,19 @@
+//The following program is apart of a satellite tracking system.  It takes data that is sent via
+//a Raspberry Pi and uses this data to control the movement of two stepper motors and an aerial
+//In order to track satellites across the sky.
+//Code written by Tony Carrick, latest compile on 25/10/2017
 /*=============================================================================================
     LIBRARY INCLUDES
 ---------------------------------------------------------------------------------------------*/
 #include <Wire.h>
-#include <LSM303.h>
+#include <LSM303.h>                         
 #include <SoftwareSerial.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_LSM303_U.h>
 #include <XBee.h>
 #include "SatellitePins.h"
 /*===========================================================================================
-    FUNCTION PROTOTYPES
+    FUNCTION PROTOTYPES - See function descriptions below main program loop
 --------------------------------------------------------------------------------------------*/
 LSM303 compass;
 SoftwareSerial xBeeSerial(XBEE_RX, XBEE_TX); // RX, TX
@@ -31,13 +35,13 @@ void MoveToAzimuth(int Angle, int Elevation);
 /*=============================================================================================
     VARIABLE DECLARATION
 ----------------------------------------------------------------------------------------------*/
-int expansion_output = 0b11001000;
+int expansion_output = 0b11001000;                            
 float Azimuth, Elevation;
 bool ElevationCalibrated = false, AzimuthCalibrated = false;
 bool WaitingForOrders = true; 
 String GOCommand;
 /*=============================================================================================
-    SETUP LOOP
+    SETUP LOOP - Calls functions that initialises sensors (Setting up Xbee comms etc.)
 ----------------------------------------------------------------------------------------------*/
 void setup() {
   InitialiseSensors();
@@ -52,12 +56,12 @@ CALIBRATION ROUTINE
 -----------------------------------------------------------------------------------------------*/
 void loop() {
   sensors_event_t event;
-//BEGIN CALIBRATION ROUTINE OF ELEVATION
+//BEGIN CALIBRATION ROUTINE OF ELEVATION  - While the antenna is not level, adjust servo motors until it is level.
   while (ElevationCalibrated == false){
-    accel.getEvent(&event);
-    Elevation = GetElevation(event.acceleration.x,event.acceleration.y,event.acceleration.z);
+    accel.getEvent(&event);            //Get the acceleromter values
+    Elevation = GetElevation(event.acceleration.x,event.acceleration.y,event.acceleration.z); //Feed accel reading into Elevation Calibration function
     while (Elevation > 5){
-      StepMotor(MOTOR_B_STEP, MOTOR_B_DIR,1,10);
+      StepMotor(MOTOR_B_STEP, MOTOR_B_DIR,1,10);      
       accel.getEvent(&event);
       Elevation = GetElevation(event.acceleration.x,event.acceleration.y,event.acceleration.z);
     }
@@ -66,64 +70,63 @@ void loop() {
       accel.getEvent(&event);
       Elevation = GetElevation(event.acceleration.x,event.acceleration.y,event.acceleration.z);
     }
-    ElevationCalibrated = true;
+    ElevationCalibrated = true;       //The device is now calibrated
   }
-//BEGIN CALIBRATION ROUTINE OF AZIMUTH
+//BEGIN CALIBRATION ROUTINE OF AZIMUTH - Move the antenna until the acceleromter reads True North
   while (AzimuthCalibrated == false){
-  compass.read();
-  Azimuth = compass.heading();//map(compass.heading()+7.0,+7,367,0,360);
-  AzimuthCalibrated = CalibrateAzimuth(Azimuth,AzimuthCalibrated);
+  compass.read();         //Measure the compass reading
+  Azimuth = compass.heading();  //Store the resulting heading
+  AzimuthCalibrated = CalibrateAzimuth(Azimuth,AzimuthCalibrated); //Call the Azimuth Calibration function until calibrated
   }
 ///////////////////////////////////////////////////////////////////////////////////////////////
-//  SEARCHING AND WAITING FOR DATA
+//  SEARCHING AND WAITING FOR DATA - The code loops and searches for incoming data (waiting for orders).  It stays here until data recieved.
 //////////////////////////////////////////////////////////////////////////////////////////////
 int DataValues[4]; 
-while(WaitingForOrders == true){
+while(WaitingForOrders == true){            
   String Data = getXbeeData();
   if (Data.length() > 0){
-    Serial.println(Data);
-    convertCSVtoInt(DataValues, 4, Data);
-    //TEST LINE TEST LINE TEST LINE
+    convertCSVtoInt(DataValues, 4, Data);      // Once data recieved, extract it from packet using "convertCSV to int
         for (int i = 0; i < 4; i++){
           Serial.println(DataValues[i]);
         }
-        WaitingForOrders = false;
+        WaitingForOrders = false;             //Flag triggers when packet recieved and causes a loop exit so main program continues
     }
 }
 ///////////////////////////////////////////////////////////////////////////////////////////////
 //    DATA RECIEVED, MOVE TO RISE AZIMUTH AND NOW WAIT FOR SATELLITE TRANSIT
 //////////////////////////////////////////////////////////////////////////////////////////////
+//Now that the data has been recieved, move to the rise position in anticipation of the satellite rise and wait for it to appear.
   compass.read();
   Serial.print(compass.heading());
-  MoveToAzimuth(DataValues[0]);
+  MoveToAzimuth(DataValues[0]);         //Move to the rise position
   bool Recieved = true;
-  do{
+  do{                                     //In a similar way to above, loop while waiting for a "GO" command 
     GOCommand = getXbeeData();
     Serial.println(GOCommand.length());
     if (GOCommand.length() == 2){
       Recieved = false;
-      Serial.println("Recieved the go command");
     }
-    else if(GOCommand.length() > 2){
+    else if(GOCommand.length() > 2){    //If a "CANCEL" command is recieved, restart the program go back to the calibrate sequence above
       WaitingForOrders = true;
       AzimuthCalibrated = false;
       Recieved = false;
     }
-  }while (Recieved);
+  }while (Recieved);                    //End the waiting for "GO" command loop
 
 ///////////////////////////////////////////////////////////////////////////////////////////////
-//    SATELLITE PASSING OVER HEAD BEGIN TRACKING
+//    SATELLITE PASSING OVER HEAD BEGIN TRACKING - At this stage, GO command would have been received, a will track satellite
 //////////////////////////////////////////////////////////////////////////////////////////////
-  GOCommand = "";
-  int DistanceToMove = (DataValues[0]-DataValues[2]);
+  GOCommand = "";                         //Clear "GO" command
+  int DistanceToMove = (DataValues[0]-DataValues[2]);   //Find the total distance of the move from the current coordinates, the setting coordinates
+  //Diretion handling for the movement
   if (DistanceToMove > 0){
-    TrackSat(abs(DistanceToMove),DataValues[3],DataValues[1],1);
+    TrackSat(abs(DistanceToMove),DataValues[3],DataValues[1],1);      //Satellite Tracking completed within this function
   }
   else{
-    TrackSat(abs(DistanceToMove),DataValues[3],DataValues[1],0);
+    TrackSat(abs(DistanceToMove),DataValues[3],DataValues[1],0);      //Same as above, with different direction argument
   }
 ///////////////////////////////////////////////////////////////////////////////////////////////
-//    SATELLITE OVER HORIZON, LOOP AND RECALIBRATE
+//    SATELLITE OVER HORIZON, LOOP AND RECALIBRATE - Reset all flags to uncalibrated, making system calibrate again, and loop.
 //////////////////////////////////////////////////////////////////////////////////////////////
   WaitingForOrders = true;
   AzimuthCalibrated = false;
@@ -151,8 +154,9 @@ void InitialiseSensors(void){
   //MAGNETOMOTER/COMPASS INITIALISATION
   compass.init();
   compass.enableDefault();
-  compass.m_min = (LSM303::vector<int16_t>){-496, -504, -123};
-  compass.m_max = (LSM303::vector<int16_t>){+706, +549, +855};
+  //Magnetometer needs below functions to ensure it scales local magnetic field to True North (Magnetic declination of Townsville is +7.40 degrees
+  compass.m_min = (LSM303::vector<int16_t>){-496, -504, -123};      //This sets the minimum values for 3 axes of magnetometer
+  compass.m_max = (LSM303::vector<int16_t>){+706, +549, +855};      //This sets the maximum values for 3 axes of magnetometer
   //ACCELEROMETER INITIALISATION
   if(!accel.begin()){
     Serial.println("No Acceleromter Sensor Detected");
@@ -166,10 +170,10 @@ void InitialiseSensors(void){
     "GetElevation"  *Function for getting Elevation - Used as a part of the calibration routine
 -----------------------------------------------------------------------------------------------*/
 float GetElevation(float XAccel,float YAccel,float ZAccel){
-  float XReading = XAccel/2.04;
-  float YReading = YAccel/2.04;
+  float XReading = XAccel/2.04;   //2.04 value is the Gain of the accelerometer. (calculated and helps scaling in a similar
+  float YReading = YAccel/2.04;   //way to the magnetometer
   float ZReading = ZAccel/2.04;
-  float Elevation = -(atan(YReading/(sqrt(pow(XReading,2.0) + pow(ZReading,2.0)))) * 180/PI) + 1.50;
+  float Elevation = -(atan(YReading/(sqrt(pow(XReading,2.0) + pow(ZReading,2.0)))) * 180/PI) + 1.50;  //Work out the Elevation angle
   return Elevation;
   }
 /*==============================================================================================*/
@@ -178,14 +182,15 @@ float GetElevation(float XAccel,float YAccel,float ZAccel){
     Function for Calibrating Azimuth Motor - Used as a part of the calibration routine
 -------------------------------------------------------------------------------------------------*/
   bool CalibrateAzimuth(float Azimuth, bool Calibrated){
+    //The following is direction handling based on current position
     if (Azimuth > 180.0 && Azimuth < 358.0){
     StepMotor(MOTOR_A_STEP, MOTOR_A_DIR,0,10);
   }
   if (Azimuth > 0.0 && Azimuth <= 180.0){
     StepMotor(MOTOR_A_STEP, MOTOR_A_DIR,1,10);
   }
-  if (Azimuth >= 358.0 || Azimuth <= 1){
-    Serial.println("Pointing North");
+  if (Azimuth >= 358.0 || Azimuth <= 1){    //Display pointing north when within 3 degrees of North
+    //Serial.println("Pointing North");     //UNCOMMENT THIS LINE IF TRYING TO MONITOR VIA SERIAL
     Calibrated = true;
   }
   return Calibrated;
@@ -202,10 +207,10 @@ void StepMotor(int MotorPin, int MotorDirectionPin, int Direction, int Speed){
   else if (Direction == 1){
     digitalWrite(MotorDirectionPin,Direction);
   }
-  digitalWrite(MotorPin,HIGH);
+  digitalWrite(MotorPin,HIGH);          //Motor takes one step per detected rising edge.
   delayMicroseconds(500);
   digitalWrite(MotorPin, LOW);
-  delay(Speed);
+  delay(Speed);                         //This delay sets the speed of the movement
   }
   /*========================================================================================*/
 
@@ -218,13 +223,13 @@ void TrackSat(int AzimuthAngle,int TimeForMove,int ElevationAngle, int Direction
   unsigned long ELEVPreviousTime = 0;
   int AzimuthStepsCounter = 0;
   int ElevationStepsCounter = 0;
-  float StepsToBeTakenAzi = round((float)AzimuthAngle*3200.0/360.0);
+  float StepsToBeTakenAzi = round((float)AzimuthAngle*3200.0/360.0);      //Calculated Steps to move the required distance
   float StepsToBeTakenElev = 2*round((float)ElevationAngle*3200.0/360.0);
-  float AZISpeed = StepsToBeTakenAzi/TimeForMove;
+  float AZISpeed = StepsToBeTakenAzi/TimeForMove;                         //Calculate the amount of steps per second
   float ELEVSpeed = StepsToBeTakenElev/TimeForMove;
-  float AZIPeriod = 1.0/AZISpeed*1000;
+  float AZIPeriod = 1.0/AZISpeed*1000;                                    //Set Period
   float ELEVPeriod = 1.0/ELEVSpeed*1000;
-  do{
+  do{//The following code steps every 'x' amount of seconds as determined by the above calculations
     TimeNow = millis();
       if (TimeNow - AZIPreviousTime >= AZIPeriod){
         if (AzimuthStepsCounter <= StepsToBeTakenAzi){
@@ -233,9 +238,9 @@ void TrackSat(int AzimuthAngle,int TimeForMove,int ElevationAngle, int Direction
         AZIPreviousTime = millis();
         }
       }
+      //The below does the same as above, only for the elevation
       TimeNow = millis();
       if (TimeNow - ELEVPreviousTime >= ELEVPeriod){
-        //Serial.println(ElevationStepsCounter);
         if (ElevationStepsCounter <= round((float)ElevationAngle*3200.0/360.0)){
           StepMotor(MOTOR_B_STEP, MOTOR_B_DIR,0,50);
           ELEVPreviousTime = millis();
@@ -243,11 +248,11 @@ void TrackSat(int AzimuthAngle,int TimeForMove,int ElevationAngle, int Direction
         else{
           StepMotor(MOTOR_B_STEP, MOTOR_B_DIR,1,50);
         }
-        ElevationStepsCounter++;
+        ElevationStepsCounter++;      
         ELEVPreviousTime = millis();
       }
     }while(AzimuthStepsCounter < StepsToBeTakenAzi);
-    ElevationStepsCounter = 0;
+    ElevationStepsCounter = 0;    //Reset Steps counter and return to the main program
     AzimuthStepsCounter = 0;
   return;
 }
@@ -257,6 +262,7 @@ void TrackSat(int AzimuthAngle,int TimeForMove,int ElevationAngle, int Direction
  /*===============================================================================================
    Fucntion for Moving to Azimuth - Used to preposition tracker in prep for rise
 --------------------------------------------------------------------------------------------------*/
+//These calculations are the same as above, only without the time dependency (i.e. moves at set speed)
 void MoveToAzimuth(int Angle){
   int AzimuthStepsCounter = 0;
   float StepsToBeTakenAzi = round((float)Angle*3200.0/360.0);
@@ -274,14 +280,14 @@ void MoveToAzimuth(int Angle){
    "getXbeeData"    *Fucntion for Getting Data - Used for Recieving from transmitting Xbee
 ------------------------------------------------------------------------------------------------*/
 String getXbeeData() {
-  String outputString = "";
+  String outputString = "";     //Set variable to store the data
     xbee.readPacket();
     if (xbee.getResponse().isAvailable()) {  
-      if (xbee.getResponse().getApiId() == ZB_RX_RESPONSE) {
+      if (xbee.getResponse().getApiId() == ZB_RX_RESPONSE) {  //If a packet is recieved
         xbee.getResponse().getZBRxResponse(rx);           
         int i;
         for (i = 0; i < rx.getDataLength(); i++){
-          outputString += char(rx.getData(i));
+          outputString += char(rx.getData(i));                //parse data into the output string variable
         }    
       } else if (xbee.getResponse().getApiId() == MODEM_STATUS_RESPONSE) {
         xbee.getResponse().getModemStatusResponse(msr);
@@ -295,7 +301,7 @@ String getXbeeData() {
    Fucntion for Parsing Data Recieved - Used for Extracting data from packet
 -----------------------------------------------------------------------------------------------*/
 void convertCSVtoInt(int *arr, int arrSize, String csvStr){
-  // Takes a pointer to an array, the size of the array and a string containing the data
+  // Takes a pointer to an array, the size of the array and a string containing the data (coverting bytes to human readable values
       String subStr = csvStr;
       arr[0] = subStr.toInt();
       for (int i = 1; i < arrSize; i++){
